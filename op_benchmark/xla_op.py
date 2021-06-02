@@ -18,9 +18,25 @@ pargs = parser.parse_args()
 
 def batch_n():
     _input = tf.compat.v1.placeholder(tf.float32, [None, 256, 32, 32])
-    _output = tf.compat.v1.layers.batch_normalization(_input, axis = 1, training = True)
+    _moving_mean = tf.compat.v1.placeholder(tf.float32, [1,256])
+    _moving_var = tf.compat.v1.placeholder(tf.float32, [1,256])
 
-    return _input,_output
+    _input_t = tf.transpose(_input, [0, 2, 3, 1])
+    _input_t_flat = tf.reshape(_input_t, [-1, 256])
+    _mean = tf.compat.v1.reduce_mean(_input_t_flat, axis=0, keepdims=True)
+    _diff = _input_t_flat - _mean
+    _diff2 = _diff*_diff
+    _var = tf.compat.v1.reduce_mean(_diff2, axis=0, keepdims=True)
+    _std_var = tf.math.sqrt(_var)
+    _normal = _diff/_std_var
+    _normal_r = tf.reshape(_normal, [-1, 32, 32, 256])
+    _output = tf.transpose(_normal_r, [0, 3, 1, 2])
+
+    _moving_mean_update = _moving_mean * 0.9 + _mean * 0.1
+    _moving_var_update = _moving_var * 0.9 + _var * 0.1
+    #_output = tf.compat.v1.layers.batch_normalization(_input, axis = 1, training = True)
+
+    return (_input, _moving_mean, _moving_var), (_output, _moving_mean_update, _moving_var_update)
 
 def normalization(axis):
     _input = tf.compat.v1.placeholder(tf.float32, [None, 1024, 256])
@@ -98,7 +114,9 @@ elif pargs.op == "element_wise":
             _ = sess.run([_output], feed_dict = {_input[0] : dataA, _input[1] : dataB, _input[2] : dataC, _input[3] : dataD})
 elif pargs.op == "batch_normalization":
     data = np.random.rand(128, 256, 32, 32).astype(np.float32)
+    mean = np.random.rand(1, 256).astype(np.float32)
+    var = np.random.rand(1, 256).astype(np.float32)
     with tf.device("GPU:0"):
         for i in range(10):
-            _ = sess.run([_output], feed_dict = {_input : data})
+            _0,_1,_2 = sess.run([_output[0], _output[1], _output[2]], feed_dict = {_input[0] : data, _input[1] : mean, _input[2] : var})
 

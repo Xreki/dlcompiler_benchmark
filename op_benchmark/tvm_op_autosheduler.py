@@ -15,26 +15,26 @@ pargs = parser.parse_args()
 
 @auto_scheduler.register_workload
 def tvm_batch_normalization(n, c, h, w):
-    A = te.placeholder((n, c, h, w), name = 'A')
-    B = topi.transpose(A, (0, 2, 3, 1))
-    C = topi.reshape(B, [-1, c])
-    D = topi.sum(C, axis=0, keepdims=True)
-    E = D / (n*h*w)
-    F = topi.subtract(C, E)
-    G = topi.multiply(F, F)
-    H = topi.sum(G, axis=0, keepdims=True)
-    I = H / (n*h*w)
-    J = topi.sqrt(I)
-    K = topi.divide(F, J)
-    L = topi.reshape(K, (n, h, w, c))
-    M = topi.transpose(L, (0, 3, 1, 2))
+    _input = te.placeholder((n, c, h, w), name = 'A')
+    _input_t = topi.transpose(_input, (0, 2, 3, 1))
+    _input_t_flat = topi.reshape(_input_t, [-1, c])
+    _input_sum = topi.sum(_input_t_flat, axis=0, keepdims=True)
+    _input_mean = _input_sum / (n*h*w)
+    _input_diff = topi.subtract(_input_t_flat, _input_mean)
+    _input_diff2 = topi.multiply(_input_diff, _input_diff)
+    _input_diff2_sum = topi.sum(_input_diff2, axis=0, keepdims=True)
+    _input_var = _input_diff2_sum / (n*h*w)
+    _input_std_var = topi.sqrt(_input_var)
+    _input_normal = topi.divide(_input_diff, _input_std_var)
+    _input_r = topi.reshape(_input_normal, (n, h, w, c))
+    _output = topi.transpose(_input_r, (0, 3, 1, 2))
 
-    mean = te.placeholder((1, c), name = 'mean')
-    var = te.placeholder((1, c), name = 'var')
-    m = mean * 0.9 + E * 0.1
-    v = var * 0.9 + J * 0.1
+    _moving_mean = te.placeholder((1, c), name = 'mean')
+    _moving_var = te.placeholder((1, c), name = 'var')
+    _moving_mean_update = _moving_mean * 0.9 + _input_mean * 0.1
+    _moving_var_update = _moving_var * 0.9 + _input_var * 0.1
 
-    return [A, mean, var, M, m, v]
+    return [_input, _moving_mean, _moving_var, _output, _moving_mean_update, _moving_var_update]
 
 @auto_scheduler.register_workload
 def tvm_normalization(c, h, w, axis):
@@ -122,7 +122,7 @@ print(task.compute_dag)
 log_file = "des.json"
 measure_ctx = auto_scheduler.LocalRPCMeasureContext(min_repeat_ms=300)
 tune_option = auto_scheduler.TuningOptions(
-    num_measure_trials=64,  # change this to 1000 to achieve the best performance
+    num_measure_trials=2,  # change this to 1000 to achieve the best performance
     runner=measure_ctx.runner,
     measure_callbacks=[auto_scheduler.RecordToFile(log_file)],
     verbose=2,
