@@ -54,11 +54,21 @@ def reduce(axis):
     return _input, _output
 
 def element_wise():
-    c, h, w = 128, 512, 1024
+    c, h, w = 256, 512, 1024
     A =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
     B =  tf.compat.v1.placeholder(tf.float32, [1, h, w])
     C =  tf.compat.v1.placeholder(tf.float32, [c, 1, w])
     D =  tf.compat.v1.placeholder(tf.float32, [c, h, 1])
+
+    _output = ((A + B) - C) * D
+    return (A,B,C,D),_output
+
+def element_wise_no_broadcast():
+    c, h, w = 256, 512, 1024
+    A =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    B =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    C =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    D =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
 
     _output = ((A + B) - C) * D
     return (A,B,C,D),_output
@@ -71,6 +81,8 @@ elif pargs.op == "reduce":
     _input, _output = reduce(pargs.axis)
 elif pargs.op == "element_wise":
     _input, _output = element_wise()
+elif pargs.op == "element_wise_no_broadcast":
+    _input, _output = element_wise_no_broadcast()
 elif pargs.op == "batch_normalization":
     _input, _output = batch_n();
 else:
@@ -104,10 +116,21 @@ elif pargs.op == "reduce":
         for i in range(10):
             _ = sess.run([_output], feed_dict = {_input : data})
 elif pargs.op == "element_wise":
-    dataA = np.random.rand(128,512,1024).astype(np.float32)
-    dataB = np.random.rand(1,512,1024).astype(np.float32)
-    dataC = np.random.rand(128,1,1024).astype(np.float32)
-    dataD = np.random.rand(128,512,1).astype(np.float32)
+    c,h,w = 256, 512, 1024
+    dataA = np.random.rand(c, h, w).astype(np.float32)
+    dataB = np.random.rand(1, h, w).astype(np.float32)
+    dataC = np.random.rand(c, 1, w).astype(np.float32)
+    dataD = np.random.rand(c, h, 1).astype(np.float32)
+
+    with tf.device("GPU:0"):
+        for i in range(10):
+            _ = sess.run([_output], feed_dict = {_input[0] : dataA, _input[1] : dataB, _input[2] : dataC, _input[3] : dataD})
+elif pargs.op == "element_wise_no_broadcast":
+    c,h,w = 256, 512, 1024
+    dataA = np.random.rand(c, h, w).astype(np.float32)
+    dataB = np.random.rand(c, h, w).astype(np.float32)
+    dataC = np.random.rand(c, h, w).astype(np.float32)
+    dataD = np.random.rand(c, h, w).astype(np.float32)
 
     with tf.device("GPU:0"):
         for i in range(10):
