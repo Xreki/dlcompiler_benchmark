@@ -20,8 +20,8 @@ X = np.random.rand(1024, 3, 224, 224)
 Y = np.random.randint(0, 1000, size = (256))
 
 #warm up
-with tf.device("GPU:0"):
-    resnet50.predict(x=X, batch_size=32, steps=8, workers=8)
+#with tf.device("GPU:0"):
+#    resnet50.predict(x=X, batch_size=32, steps=8, workers=8)
 
 time_start=time.time()
 with tf.device("GPU:0"):
