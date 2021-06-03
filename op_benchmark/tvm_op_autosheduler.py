@@ -15,26 +15,26 @@ pargs = parser.parse_args()
 
 @auto_scheduler.register_workload
 def tvm_batch_normalization(n, c, h, w):
-    A = te.placeholder((n, c, h, w), name = 'A')
-    B = topi.transpose(A, (0, 2, 3, 1))
-    C = topi.reshape(B, [-1, c])
-    D = topi.sum(C, axis=0, keepdims=True)
-    E = D / (n*h*w)
-    F = topi.subtract(C, E)
-    G = topi.multiply(F, F)
-    H = topi.sum(G, axis=0, keepdims=True)
-    I = H / (n*h*w)
-    J = topi.sqrt(I)
-    K = topi.divide(F, J)
-    L = topi.reshape(K, (n, h, w, c))
-    M = topi.transpose(L, (0, 3, 1, 2))
+    _input = te.placeholder((n, c, h, w), name = 'A')
+    _input_t = topi.transpose(_input, (0, 2, 3, 1))
+    _input_t_flat = topi.reshape(_input_t, [-1, c])
+    _input_sum = topi.sum(_input_t_flat, axis=0, keepdims=True)
+    _input_mean = _input_sum / (n*h*w)
+    _input_diff = topi.subtract(_input_t_flat, _input_mean)
+    _input_diff2 = topi.multiply(_input_diff, _input_diff)
+    _input_diff2_sum = topi.sum(_input_diff2, axis=0, keepdims=True)
+    _input_var = _input_diff2_sum / (n*h*w)
+    _input_std_var = topi.sqrt(_input_var)
+    _input_normal = topi.divide(_input_diff, _input_std_var)
+    _input_r = topi.reshape(_input_normal, (n, h, w, c))
+    _output = topi.transpose(_input_r, (0, 3, 1, 2))
 
-    mean = te.placeholder((1, c), name = 'mean')
-    var = te.placeholder((1, c), name = 'var')
-    m = mean * 0.9 + E * 0.1
-    v = var * 0.9 + J * 0.1
+    _moving_mean = te.placeholder((1, c), name = 'mean')
+    _moving_var = te.placeholder((1, c), name = 'var')
+    _moving_mean_update = _moving_mean * 0.9 + _input_mean * 0.1
+    _moving_var_update = _moving_var * 0.9 + _input_var * 0.1
 
-    return [A, mean, var, M, m, v]
+    return [_input, _moving_mean, _moving_var, _output, _moving_mean_update, _moving_var_update]
 
 @auto_scheduler.register_workload
 def tvm_normalization(c, h, w, axis):
@@ -76,6 +76,19 @@ def tvm_fuse_elementwise(c1, h1, w1, c2, h2, w2, c3, h3, w3, c4, h4, w4):
 
     return [A,B,C,D,G]
 
+@auto_scheduler.register_workload
+def tvm_fuse_elementwise_no_broadcast(c, h, w):
+    A = te.placeholder((c, h, w), name = 'A')
+    B = te.placeholder((c, h, w), name = 'B')
+    C = te.placeholder((c, h, w), name = 'C')
+    D = te.placeholder((c, h, w), name = 'D')
+
+    E = topi.add(A, B)
+    F = topi.subtract(E, C)
+    G = topi.multiply(F, D)
+
+    return [A,B,C,D,G]
+
 target = tvm.target.Target("cuda")
 
 def batch_normalization():
@@ -98,12 +111,18 @@ def reduce(axis):
     return task
 
 def element_wise():
-    c1,h1,w1 = 128, 512, 1024
+    c1,h1,w1 = 256, 512, 1024
     c2,h2,w2 = 1, 512, 1024
-    c3,h3,w3 = 128, 1, 1024
-    c4,h4,w4 = 128, 512, 1
+    c3,h3,w3 = 256, 1, 1024
+    c4,h4,w4 = 256, 512, 1
 
     task = auto_scheduler.SearchTask(func = tvm_fuse_elementwise, args = (c1,h1,w1,c2,h2,w2,c3,h3,w3,c4,h4,w4), target = target)
+    return task
+
+def element_wise_no_broadcast():
+    c,h,w = 256, 512, 1024
+
+    task = auto_scheduler.SearchTask(func = tvm_fuse_elementwise_no_broadcast, args = (c,h,w), target = target)
     return task
 
 if pargs.op == "normalization":
@@ -112,6 +131,8 @@ elif pargs.op == "reduce":
     task = reduce(pargs.axis)
 elif pargs.op == "element_wise":
     task = element_wise()
+elif pargs.op == "element_wise_no_broadcast":
+    task = element_wise_no_broadcast()
 elif pargs.op == "batch_normalization":
     task = batch_normalization()
 else:
@@ -120,9 +141,9 @@ else:
 print(task.compute_dag)
 
 log_file = "des.json"
-measure_ctx = auto_scheduler.LocalRPCMeasureContext(min_repeat_ms=300)
+measure_ctx = auto_scheduler.LocalRPCMeasureContext(n_parallel=4,timeout=30,min_repeat_ms=300)
 tune_option = auto_scheduler.TuningOptions(
-    num_measure_trials=64,  # change this to 1000 to achieve the best performance
+    num_measure_trials=16,  # change this to 1000 to achieve the best performance
     runner=measure_ctx.runner,
     measure_callbacks=[auto_scheduler.RecordToFile(log_file)],
     verbose=2,
@@ -179,16 +200,35 @@ def run_batch_normalization(mod):
         mod(tvm_A, tvm_mean, tvm_var, tvm_O, tvm_m, tvm_v)
 
 def run_element_wise(mod):
-    c1,h1,w1 = 128, 512, 1024
+    c1,h1,w1 = 256, 512, 1024
     c2,h2,w2 = 1,   512, 1024
-    c3,h3,w3 = 128, 1  , 1024
-    c4,h4,w4 = 128, 512, 1
+    c3,h3,w3 = 256, 1  , 1024
+    c4,h4,w4 = 256, 512, 1
 
     A = np.random.uniform(size=(c1, h1, w1)).astype(np.float32)
     B = np.random.uniform(size=(c2, h2, w2)).astype(np.float32)
     C = np.random.uniform(size=(c3, h3, w3)).astype(np.float32)
     D = np.random.uniform(size=(c4, h4, w4)).astype(np.float32)
     O = np.zeros(shape=(c1, h1, w1), dtype=np.float32)
+
+    dev = tvm.gpu()
+    tvm_A = tvm.nd.array(A, device=dev)
+    tvm_B = tvm.nd.array(B, device=dev)
+    tvm_C = tvm.nd.array(C, device=dev)
+    tvm_D = tvm.nd.array(D, device=dev)
+    tvm_O = tvm.nd.empty(O.shape, device=dev)
+
+    for i in range(10):
+        mod(tvm_A, tvm_B, tvm_C, tvm_D, tvm_O)
+
+def run_element_wise_no_broadcast(mod):
+    c,h,w = 256, 512, 1024
+
+    A = np.random.uniform(size=(c, h, w)).astype(np.float32)
+    B = np.random.uniform(size=(c, h, w)).astype(np.float32)
+    C = np.random.uniform(size=(c, h, w)).astype(np.float32)
+    D = np.random.uniform(size=(c, h, w)).astype(np.float32)
+    O = np.zeros(shape=(c, h, w), dtype=np.float32)
 
     dev = tvm.gpu()
     tvm_A = tvm.nd.array(A, device=dev)
@@ -224,6 +264,8 @@ elif pargs.op == "reduce":
     run_reduce(mod, pargs.axis)
 elif pargs.op == "element_wise":
     run_element_wise(mod)
+elif pargs.op == "element_wise_no_broadcast":
+    run_element_wise_no_broadcast(mod)
 
 #run_element_wise(mod)
 #A = te.placeholder((B,N), name = 'A')

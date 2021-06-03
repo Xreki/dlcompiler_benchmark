@@ -18,9 +18,25 @@ pargs = parser.parse_args()
 
 def batch_n():
     _input = tf.compat.v1.placeholder(tf.float32, [None, 256, 32, 32])
-    _output = tf.compat.v1.layers.batch_normalization(_input, axis = 1, training = True)
+    _moving_mean = tf.compat.v1.placeholder(tf.float32, [1,256])
+    _moving_var = tf.compat.v1.placeholder(tf.float32, [1,256])
 
-    return _input,_output
+    _input_t = tf.transpose(_input, [0, 2, 3, 1])
+    _input_t_flat = tf.reshape(_input_t, [-1, 256])
+    _mean = tf.compat.v1.reduce_mean(_input_t_flat, axis=0, keepdims=True)
+    _diff = _input_t_flat - _mean
+    _diff2 = _diff*_diff
+    _var = tf.compat.v1.reduce_mean(_diff2, axis=0, keepdims=True)
+    _std_var = tf.math.sqrt(_var)
+    _normal = _diff/_std_var
+    _normal_r = tf.reshape(_normal, [-1, 32, 32, 256])
+    _output = tf.transpose(_normal_r, [0, 3, 1, 2])
+
+    _moving_mean_update = _moving_mean * 0.9 + _mean * 0.1
+    _moving_var_update = _moving_var * 0.9 + _var * 0.1
+    #_output = tf.compat.v1.layers.batch_normalization(_input, axis = 1, training = True)
+
+    return (_input, _moving_mean, _moving_var), (_output, _moving_mean_update, _moving_var_update)
 
 def normalization(axis):
     _input = tf.compat.v1.placeholder(tf.float32, [None, 1024, 256])
@@ -38,11 +54,21 @@ def reduce(axis):
     return _input, _output
 
 def element_wise():
-    c, h, w = 128, 512, 1024
+    c, h, w = 256, 512, 1024
     A =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
     B =  tf.compat.v1.placeholder(tf.float32, [1, h, w])
     C =  tf.compat.v1.placeholder(tf.float32, [c, 1, w])
     D =  tf.compat.v1.placeholder(tf.float32, [c, h, 1])
+
+    _output = ((A + B) - C) * D
+    return (A,B,C,D),_output
+
+def element_wise_no_broadcast():
+    c, h, w = 256, 512, 1024
+    A =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    B =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    C =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
+    D =  tf.compat.v1.placeholder(tf.float32, [c, h, w])
 
     _output = ((A + B) - C) * D
     return (A,B,C,D),_output
@@ -55,6 +81,8 @@ elif pargs.op == "reduce":
     _input, _output = reduce(pargs.axis)
 elif pargs.op == "element_wise":
     _input, _output = element_wise()
+elif pargs.op == "element_wise_no_broadcast":
+    _input, _output = element_wise_no_broadcast()
 elif pargs.op == "batch_normalization":
     _input, _output = batch_n();
 else:
@@ -88,17 +116,30 @@ elif pargs.op == "reduce":
         for i in range(10):
             _ = sess.run([_output], feed_dict = {_input : data})
 elif pargs.op == "element_wise":
-    dataA = np.random.rand(128,512,1024).astype(np.float32)
-    dataB = np.random.rand(1,512,1024).astype(np.float32)
-    dataC = np.random.rand(128,1,1024).astype(np.float32)
-    dataD = np.random.rand(128,512,1).astype(np.float32)
+    c,h,w = 256, 512, 1024
+    dataA = np.random.rand(c, h, w).astype(np.float32)
+    dataB = np.random.rand(1, h, w).astype(np.float32)
+    dataC = np.random.rand(c, 1, w).astype(np.float32)
+    dataD = np.random.rand(c, h, 1).astype(np.float32)
+
+    with tf.device("GPU:0"):
+        for i in range(10):
+            _ = sess.run([_output], feed_dict = {_input[0] : dataA, _input[1] : dataB, _input[2] : dataC, _input[3] : dataD})
+elif pargs.op == "element_wise_no_broadcast":
+    c,h,w = 256, 512, 1024
+    dataA = np.random.rand(c, h, w).astype(np.float32)
+    dataB = np.random.rand(c, h, w).astype(np.float32)
+    dataC = np.random.rand(c, h, w).astype(np.float32)
+    dataD = np.random.rand(c, h, w).astype(np.float32)
 
     with tf.device("GPU:0"):
         for i in range(10):
             _ = sess.run([_output], feed_dict = {_input[0] : dataA, _input[1] : dataB, _input[2] : dataC, _input[3] : dataD})
 elif pargs.op == "batch_normalization":
     data = np.random.rand(128, 256, 32, 32).astype(np.float32)
+    mean = np.random.rand(1, 256).astype(np.float32)
+    var = np.random.rand(1, 256).astype(np.float32)
     with tf.device("GPU:0"):
         for i in range(10):
-            _ = sess.run([_output], feed_dict = {_input : data})
+            _0,_1,_2 = sess.run([_output[0], _output[1], _output[2]], feed_dict = {_input[0] : data, _input[1] : mean, _input[2] : var})
 
