@@ -75,10 +75,11 @@ task = resnet_block()
 print(task.compute_dag)
 
 log_file = "des.json"
-measure_ctx = auto_scheduler.LocalRPCMeasureContext(n_parallel=8,timeout=1000,min_repeat_ms=300)
+measure_ctx = auto_scheduler.LocalRPCMeasureContext(n_parallel=8,timeout=20,min_repeat_ms=300)
 tune_option = auto_scheduler.TuningOptions(
     num_measure_trials=16,  # change this to 1000 to achieve the best performance
     runner=measure_ctx.runner,
+    early_stopping=10,
     measure_callbacks=[auto_scheduler.RecordToFile(log_file)],
     verbose=2,
 )
